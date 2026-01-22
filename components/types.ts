@@ -2,7 +2,7 @@ export type ScreenName = 'login' | 'dashboard' | 'fieldVisits' | 'services' | 's
 
 export type TaskStatus = 'In Progress' | 'Pending' | 'Urgent' | 'Completed';
 export type VisitStatus = 'Scheduled' | 'Completed' | 'Overdue';
-export type ServiceStatus = 'Processing' | 'Pending' | 'In Progress' | 'Completed' | 'Cancelled';
+export type ServiceStatus = 'Processing' | 'Pending' | 'In Progress' | 'Completed' | 'Cancelled' | 'Applied';
 export type ServicePriority = 'High' | 'Medium' | 'Low';
 
 export type Task = {

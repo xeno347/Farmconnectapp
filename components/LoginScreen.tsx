@@ -63,8 +63,8 @@ export function LoginScreen({
     };
 
     // Correct endpoint + request/response shape per backend spec
-    const result = await postJson<LoginResponse>('/farmer_management/login', payload);
-
+    const result = await postJson<LoginResponse>('/farmer_managment/login', payload);
+ 
     setSubmitting(false);
 
     if (!result.ok) {

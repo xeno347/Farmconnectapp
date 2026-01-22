@@ -49,6 +49,21 @@ type Props = {
 
 type FormPriority = 'Low' | 'Normal' | 'High';
 
+type RentalRateCardTimeline = {
+  rental_end_date?: string;
+  rental_start_date?: string;
+  application_end_date?: string;
+  application_start_date?: string;
+};
+
+type RentalRateCard = {
+  rental_id: string;
+  service_name: string;
+  billing_unit?: string;
+  base_price?: number;
+  timeline?: RentalRateCardTimeline[];
+};
+
 export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, initialTab = 'active', onOpenRequestsPage }: Props) {
   const [showServiceSelection, setShowServiceSelection] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -62,10 +77,9 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
 
   // Backend-loaded rate cards for creating a new request
   const [rateCardsLoading, setRateCardsLoading] = useState(false);
-  const [backendRateCards, setBackendRateCards] = useState<ServiceCatalogItem[] | null>(null);
+  const [backendRateCards, setBackendRateCards] = useState<RentalRateCard[] | null>(null);
 
-  const [formServiceKey, setFormServiceKey] = useState<string>('');
-  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [formRentalId, setFormRentalId] = useState<string>('');
 
   // Timeline modal state
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -74,85 +88,33 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
 
   const servicesCatalog: ServiceCatalogItem[] = useMemo(() => makeServiceCatalog(), []);
 
-  const effectiveCatalog = useMemo(() => {
-    // Prefer backend rate cards when available; fallback to local catalog.
-    return backendRateCards && backendRateCards.length ? backendRateCards : servicesCatalog;
-  }, [backendRateCards, servicesCatalog]);
-
   const toastVisible = !!toast;
 
-  const createRequest = async (svc: ServiceCatalogItem) => {
-    setCreating(true);
-
-    try {
-      const farmerId = getFarmerId();
-      if (!farmerId) throw new Error('Not logged in. Missing farmer_id.');
-
-      // Attempt backend request creation first.
-      // NOTE: request/response fields may need adjustment once you confirm backend JSON.
-      const res = await postJson<any>('/admin_rental/make_rental_request', {
-        farmer_id: farmerId,
-        service_key: svc.key,
-        service_name: svc.title,
-      });
-
-      if (res.ok) {
-        const now = new Date();
-        const requestId = String((res.data as any)?.request_id ?? (res.data as any)?.id ?? `#SR-${Math.floor(2000 + Math.random() * 8000)}`);
-        const scheduled = addDays(now, svc.daysUntilAvailable);
-
-        const tl = buildTimelineFromStage('processing', now.toISOString(), scheduled.toISOString(), svc.title);
-
-        const req: TrackedServiceRequest = {
-          id: `${Date.now()}`,
-          requestId,
-          createdAt: now.toISOString(),
-          service: svc,
-          timeline: tl,
-          scheduledDateLabel: scheduled.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
-        };
-
-        onCreateTrackedRequest(req);
-
-        setToast('Service request created!');
-        setTimeout(() => setToast(null), 3000);
-
-        return;
-      }
-
-      // If backend fails, fallback to existing simulated flow (keeps app usable during integration)
-      // Simulated network delay 1-2 seconds
-      await new Promise<void>((resolve) => setTimeout(resolve, 1200));
-
-      const now = new Date();
-      const requestId = `#SR-${Math.floor(2000 + Math.random() * 8000)}`;
-      const scheduled = addDays(now, svc.daysUntilAvailable);
-
-      const tl = buildTimelineFromStage('processing', now.toISOString(), scheduled.toISOString(), svc.title);
-
-      const req: TrackedServiceRequest = {
-        id: `${Date.now()}`,
-        requestId,
-        createdAt: now.toISOString(),
-        service: svc,
-        timeline: tl,
-        scheduledDateLabel: scheduled.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
-      };
-
-      onCreateTrackedRequest(req);
-
-      setToast('Service request created!');
-      setTimeout(() => setToast(null), 3000);
-    } finally {
-      setCreating(false);
-      setShowServiceSelection(false);
-    }
-  };
-
-  const selectedService = useMemo(
-    () => effectiveCatalog.find((s) => s.key === (formServiceKey as any)) ?? null,
-    [formServiceKey, effectiveCatalog],
+  const selectedRateCard = useMemo(
+    () => backendRateCards?.find((c) => String(c.rental_id) === String(formRentalId)) ?? null,
+    [backendRateCards, formRentalId],
   );
+
+  const selectedService = useMemo(() => {
+    // Convert a rental rate card into a ServiceCatalogItem for UI accents + local tracking.
+    if (selectedRateCard) {
+      const priceValue = Number(selectedRateCard.base_price ?? 0);
+      return {
+        key: String(selectedRateCard.rental_id),
+        title: String(selectedRateCard.service_name ?? 'Service'),
+        description: '',
+        priceLabel: `₹${Number.isFinite(priceValue) ? priceValue : 0}`,
+        priceValue: Number.isFinite(priceValue) ? priceValue : 0,
+        icon: 'tractor',
+        colorA: '#3f7a63',
+        colorB: '#1f4f3b',
+        daysUntilAvailable: 2,
+      } as unknown as ServiceCatalogItem;
+    }
+
+    // Fallback to local catalog (demo mode)
+    return servicesCatalog.find((s) => s.key === (formRentalId as any)) ?? null;
+  }, [formRentalId, selectedRateCard, servicesCatalog]);
 
   const openTimeline = (title: string, tl: ServiceTimeline) => {
     haptic('selection');
@@ -161,7 +123,7 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
     setTimelineOpen(true);
   };
 
-  const canContinue = !!selectedService && termsAccepted && !creating;
+  const canContinue = !!selectedService && !creating;
 
   const submitInlineRequest = async () => {
     if (!selectedService) {
@@ -171,30 +133,72 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
       return;
     }
 
-    if (!termsAccepted) {
+    const farmerId = getFarmerId();
+    if (!farmerId) {
       haptic('warning');
-      setToast('Please accept the terms to continue.');
-      setTimeout(() => setToast(null), 2500);
+      Alert.alert('Not logged in', 'Please log in again to submit a request.');
       return;
     }
 
-    haptic('medium');
-    await createRequest(selectedService);
+    const rentalId = String(selectedRateCard?.rental_id ?? '').trim();
+    if (!rentalId) {
+      haptic('warning');
+      Alert.alert('Missing rental id', 'Please select a rental card from the backend list.');
+      return;
+    }
 
-    haptic('success');
+    setCreating(true);
+    try {
+      haptic('medium');
 
-    setFormServiceKey('');
-    setTermsAccepted(false);
+      const res = await postJson<any>('/admin_rental/make_rental_request', {
+        rental_id: rentalId,
+        farmer_id: farmerId,
+      });
 
-    setHubMode('track');
-    onOpenRequestsPage?.();
+      if (!res.ok) {
+        haptic('warning');
+        Alert.alert('Submit failed', res.error || 'Request failed');
+        return;
+      }
+
+      const now = new Date();
+      const requestId = String((res.data as any)?.request_id ?? (res.data as any)?.id ?? `REQ-${Math.floor(100000 + Math.random() * 900000)}`);
+
+      const tl0 = selectedRateCard?.timeline?.[0];
+      const scheduledAt = tl0?.rental_start_date ? safeDate(tl0.rental_start_date) : addDays(now, 2);
+      const tl = buildTimelineFromStage('submitted', now.toISOString(), scheduledAt.toISOString(), selectedService.title);
+
+      const req: TrackedServiceRequest = {
+        id: `${Date.now()}`,
+        requestId,
+        createdAt: now.toISOString(),
+        service: selectedService,
+        timeline: tl,
+        scheduledDateLabel: safeToLocaleDateString(scheduledAt, { month: 'short', day: 'numeric', year: 'numeric' }),
+      };
+
+      onCreateTrackedRequest(req);
+
+      haptic('success');
+      setToast('Request submitted!');
+      setTimeout(() => setToast(null), 3000);
+
+      setFormRentalId('');
+      setHubMode('track');
+      onOpenRequestsPage?.();
+    } finally {
+      setCreating(false);
+      setShowServiceSelection(false);
+    }
   };
 
   const nextAvailableLabel = useMemo(() => {
-    if (!selectedService) return '';
-    const d = addDays(new Date(), selectedService.daysUntilAvailable);
-    return safeToLocaleDateString(d, { month: 'short', day: 'numeric', year: 'numeric' });
-  }, [selectedService]);
+    // Prefer server-provided timeline dates if present.
+    const tl0 = selectedRateCard?.timeline?.[0];
+    const d = tl0?.rental_start_date ? safeDate(tl0.rental_start_date) : selectedService ? addDays(new Date(), selectedService.daysUntilAvailable) : null;
+    return d ? safeToLocaleDateString(d, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  }, [selectedRateCard, selectedService]);
 
   const selectedAccent = useMemo(() => {
     if (!selectedService) return { a: '#4b7a55', b: '#2f5f3b' };
@@ -202,8 +206,8 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
   }, [selectedService]);
 
   const requestItems = useMemo(() => {
-    // When we're in “request” mode, show backend list (if available) else fallback to provided items.
-    if (hubMode === 'request' && backendRequests) return backendRequests.map(withServiceTimeline);
+    // When we're in “track” mode, show backend list (if available) else fallback to provided items.
+    if (hubMode === 'track' && backendRequests) return backendRequests.map(withServiceTimeline);
     return items.map(withServiceTimeline);
   }, [backendRequests, hubMode, items]);
 
@@ -213,48 +217,37 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
 
     async function loadRateCards() {
       try {
-        const farmerId = getFarmerId();
-        if (!farmerId) return;
-
         setRateCardsLoading(true);
 
-        const r1 = await getJson<any>(`/admin_rental/get_all_rental_rate_cards?farmer_id=${encodeURIComponent(farmerId)}`);
-        const r2 = r1.ok ? r1 : await postJson<any>('/admin_rental/get_all_rental_rate_cards', { farmer_id: farmerId });
+        // Backend spec: simple GET request; no farmer_id required.
+        const r = await getJson<any>('/admin_rental/get_all_rental_rate_cards');
+        if (!r.ok) return;
 
-        if (!r2.ok) return;
-
-        const raw = r2.data;
-        const list = Array.isArray((raw as any)?.rate_cards)
-          ? (raw as any).rate_cards
-          : Array.isArray((raw as any)?.rental_rate_cards)
-            ? (raw as any).rental_rate_cards
-            : Array.isArray(raw)
-              ? raw
+        const raw = r.data;
+        const list = Array.isArray(raw)
+          ? raw
+          : Array.isArray((raw as any)?.rate_cards)
+            ? (raw as any).rate_cards
+            : Array.isArray((raw as any)?.rental_rate_cards)
+              ? (raw as any).rental_rate_cards
               : [];
 
-        const mapped: ServiceCatalogItem[] = list
-          .map((c: any, idx: number) => {
-            const title = String(c?.service_name ?? c?.name ?? c?.title ?? 'Service');
-            const key = String(c?.service_key ?? c?.key ?? c?.id ?? title.toLowerCase().replace(/\s+/g, '_') ?? idx);
+        const mapped: RentalRateCard[] = list
+          .map((c: any) => {
+            const rentalId = String(c?.rental_id ?? c?.id ?? '').trim();
+            if (!rentalId) return null;
 
-            // Price could be number or string.
-            const priceRaw = c?.price ?? c?.service_price ?? c?.rate ?? c?.amount;
-            const price = typeof priceRaw === 'number' ? priceRaw : Number(priceRaw);
-            const priceValue = Number.isFinite(price) ? (price as number) : 0;
+            const base = typeof c?.base_price === 'number' ? c.base_price : Number(c?.base_price);
 
             return {
-              key,
-              title,
-              description: String(c?.description ?? ''),
-              priceLabel: `₹${priceValue}`,
-              priceValue,
-              icon: 'tractor',
-              colorA: '#3f7a63',
-              colorB: '#1f4f3b',
-              daysUntilAvailable: 2,
-            } as unknown as ServiceCatalogItem;
+              rental_id: rentalId,
+              service_name: String(c?.service_name ?? c?.name ?? 'Service'),
+              billing_unit: c?.billing_unit ? String(c.billing_unit) : undefined,
+              base_price: Number.isFinite(base) ? base : undefined,
+              timeline: Array.isArray(c?.timeline) ? (c.timeline as any[]) : undefined,
+            } as RentalRateCard;
           })
-          .filter(Boolean);
+          .filter(Boolean) as RentalRateCard[];
 
         if (cancelled) return;
         if (mapped.length) setBackendRateCards(mapped);
@@ -270,8 +263,8 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
   }, []);
 
   useEffect(() => {
-    // Fetch requests whenever the Request Service page is opened.
-    if (hubMode !== 'request') return;
+    // Fetch requests whenever the Track Requests page is opened.
+    if (hubMode !== 'track') return;
 
     let cancelled = false;
 
@@ -292,28 +285,38 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
 
         const mapped: ServiceRequest[] = list.map((r0: any, idx: number) => {
           const req = r0?.request_details ?? r0?.request ?? {};
-          const statusRaw = String(req?.status ?? '').toLowerCase();
+          const statusRaw = String(req?.status ?? '').trim();
+          const statusKey = statusRaw.toLowerCase();
 
           const status: ServiceStatus =
-            statusRaw === 'approved' || statusRaw === 'work_order'
-              ? 'In Progress'
-              : statusRaw === 'completed'
-                ? 'Completed'
-                : statusRaw
-                  ? 'Processing'
-                  : 'Pending';
+            statusKey === 'applied'
+              ? 'Applied'
+              : statusKey === 'approved' || statusKey === 'work_order'
+                ? 'In Progress'
+                : statusKey === 'completed'
+                  ? 'Completed'
+                  : statusKey === 'cancelled' || statusKey === 'canceled'
+                    ? 'Cancelled'
+                    : statusKey === 'processing'
+                      ? 'Processing'
+                      : 'Pending';
 
           const requestedIso = String(req?.requested_date ?? new Date().toISOString());
+          const requestedLabel = safeToLocaleDateString(safeDate(requestedIso), {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
 
           return {
-            id: String(r0?.rental_id ?? r0?.id ?? `${Date.now()}-${idx}`),
+            id: String(req?.request_id ?? r0?.request_id ?? `${Date.now()}-${idx}`),
             requestId: String(req?.request_id ?? r0?.request_id ?? `REQ-${idx + 1}`),
-            title: String(r0?.service_name ?? r0?.service_title ?? 'Service Request'),
+            title: String(r0?.service_name ?? r0?.service_title ?? 'Service'),
             category: 'Equipment',
-            requestedDate: requestedIso,
+            requestedDate: requestedLabel || requestedIso,
             priority: 'Medium',
             status,
-            description: `Area: ${req?.area ?? '\u2014'}${req?.farmer_name ? ` \u2022 Farmer: ${req.farmer_name}` : ''}`,
+            description: `Application status: ${statusRaw || '\u2014'}`,
             assignedTo: '',
             color: 'teal',
             icon: 'wrench',
@@ -412,34 +415,39 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
                   {selectedService ? renderSvcIcon(selectedService.icon, 16, '#fff') : <Inbox size={16} color="#fff" />}
                 </View>
                 <Text style={[styles.selectLikeText, !selectedService ? styles.selectLikePlaceholder : null]}>
-                  {selectedService ? selectedService.title : 'Select a service...'}
+                  {selectedService ? selectedService.title : rateCardsLoading ? 'Loading services...' : 'Select a service...'}
                 </Text>
                 <Text style={styles.selectLikeChevron}>⌄</Text>
               </Pressable>
 
-              {/* Replace Description + Priority with Price + Service Date */}
+              {/* Details from rental card */}
               <View style={styles.metaGrid}>
                 <View style={[styles.metaBox, { borderColor: selectedAccent.a }]}> 
-                  <Text style={styles.metaLabel}>Price</Text>
-                  <Text style={styles.metaValue}>{selectedService ? selectedService.priceLabel : '—'}</Text>
+                  <Text style={styles.metaLabel}>Base Price</Text>
+                  <Text style={styles.metaValue}>{selectedRateCard?.base_price !== undefined ? `₹${selectedRateCard.base_price}` : '—'}</Text>
                 </View>
                 <View style={[styles.metaBox, { borderColor: selectedAccent.a }]}> 
-                  <Text style={styles.metaLabel}>Service Date</Text>
-                  <Text style={styles.metaValue}>{selectedService ? nextAvailableLabel : '—'}</Text>
+                  <Text style={styles.metaLabel}>Billing Unit</Text>
+                  <Text style={styles.metaValue}>{selectedRateCard?.billing_unit ? selectedRateCard.billing_unit : '—'}</Text>
                 </View>
               </View>
 
-              <Pressable
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: termsAccepted }}
-                onPress={() => setTermsAccepted((v) => !v)}
-                style={styles.termsRow}
-              >
-                <View style={[styles.checkBox, termsAccepted ? styles.checkBoxChecked : null]}>
-                  {termsAccepted ? <Check size={14} color="#fff" /> : null}
+              {selectedRateCard?.timeline?.length ? (
+                <View style={{ marginTop: 14 }}>
+                  <Text style={[styles.fieldLabel, { marginBottom: 10 }]}>Timeline</Text>
+                  {selectedRateCard.timeline.map((t, idx) => (
+                    <View key={`${selectedRateCard.rental_id}-${idx}`} style={[styles.metaBox, { borderColor: '#eef2ea', marginBottom: 10 }]}>
+                      <Text style={styles.metaLabel}>{`Window ${idx + 1}`}</Text>
+                      <Text style={styles.metaValue}>{
+                        `Application: ${t.application_start_date ?? '—'} → ${t.application_end_date ?? '—'}`
+                      }</Text>
+                      <Text style={[styles.metaValue, { marginTop: 6 }]}>{
+                        `Rental: ${t.rental_start_date ?? '—'} → ${t.rental_end_date ?? '—'}`
+                      }</Text>
+                    </View>
+                  ))}
                 </View>
-                <Text style={styles.termsText}>I agree to the Terms & Conditions</Text>
-              </Pressable>
+              ) : null}
 
               <MotionPressable
                 accessibilityRole="button"
@@ -452,10 +460,10 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
                 {creating ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                     <ActivityIndicator color="#fff" />
-                    <Text style={styles.submitText}>Creating...</Text>
+                    <Text style={styles.submitText}>Submitting...</Text>
                   </View>
                 ) : (
-                  <Text style={styles.submitText}>Agree & Continue</Text>
+                  <Text style={styles.submitText}>Submit</Text>
                 )}
               </MotionPressable>
             </View>
@@ -497,28 +505,37 @@ export function ServicesHub({ items, trackedRequests, onCreateTrackedRequest, in
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 14 }}>
-              {servicesCatalog.map((svc) => {
-                const active = svc.key === (formServiceKey as any);
+              {(backendRateCards && backendRateCards.length
+                ? backendRateCards
+                : servicesCatalog.map((s) => ({
+                    rental_id: String(s.key),
+                    service_name: s.title,
+                    billing_unit: undefined,
+                    base_price: s.priceValue,
+                    timeline: undefined,
+                  } as RentalRateCard))
+              ).map((svc) => {
+                const active = svc.rental_id === (formRentalId as any);
                 return (
                   <Pressable
-                    key={svc.key}
+                    key={svc.rental_id}
                     style={[styles.serviceRow, active ? styles.serviceRowActive : null]}
                     onPress={() => {
                       haptic('selection');
-                      setFormServiceKey(String(svc.key));
+                      setFormRentalId(String(svc.rental_id));
                       setShowServiceSelection(false);
                     }}
                   >
                     <View style={styles.serviceRowLeft}>
-                      <View style={[styles.serviceIcon, { backgroundColor: svc.colorA + '22' }]}>
-                        {renderSvcIcon(svc.icon, 18, svc.colorA)}
+                      <View style={[styles.serviceIcon, { backgroundColor: '#3f7a6322' }]}>
+                        {renderSvcIcon('tractor' as any, 18, '#3f7a63')}
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.serviceTitle}>{svc.title}</Text>
-                        <Text style={styles.serviceDesc}>{svc.description}</Text>
+                        <Text style={styles.serviceTitle}>{svc.service_name}</Text>
+                        <Text style={styles.serviceDesc}>{svc.billing_unit ? `Billing: ${svc.billing_unit}` : ' '}</Text>
                       </View>
                     </View>
-                    <Text style={[styles.servicePrice, { color: svc.colorA }]}>{svc.priceLabel}</Text>
+                    <Text style={[styles.servicePrice, { color: '#3f7a63' }]}>{svc.base_price !== undefined ? `₹${svc.base_price}` : '—'}</Text>
                   </Pressable>
                 );
               })}
