@@ -16,79 +16,9 @@ import { Toast } from './ui/Toast';
 import { AnimatedToast } from './ui/AnimatedToast';
 import { pickAccent } from './theme';
 import { Skeleton } from './ui/Skeleton';
-import { getJson } from './api';
-import { getFarmerId } from './session';
 
 const MotionView = motion.create(View);
 const MotionPressable = motion.create(Pressable);
-
-type CultivationPlanItem = {
-  id: string;
-  calendar_id?: string;
-  plan_id?: string;
-  block_id?: string;
-  farm_id?: string;
-  activity: string;
-  index?: number;
-  date?: string; // YYYY-MM-DD
-  assigned_area?: number;
-  status?: string;
-};
-
-function normStatus(s: unknown) {
-  return String(s ?? '').trim().toLowerCase();
-}
-
-function isPendingForFarmer(status: unknown) {
-  return normStatus(status) === 'pending';
-}
-
-function isPendingForSupervisor(status: unknown) {
-  const v = normStatus(status);
-  return (
-    v === 'pending approval' ||
-    v === 'pending_approval' ||
-    v === 'approval pending' ||
-    v === 'approval_pending' ||
-    v === 'awaiting approval' ||
-    v === 'awaiting_approval' ||
-    v === 'supervisor pending' ||
-    v === 'supervisor_pending' ||
-    v === 'work done' ||
-    v === 'work_done' ||
-    v === 'done'
-  );
-}
-
-function safeDate(input: string | Date): Date | null {
-  if (!input) return null;
-  if (input instanceof Date) return Number.isNaN(input.getTime()) ? null : input;
-
-  const s = String(input).trim();
-  if (!s) return null;
-
-  // Handles YYYY-MM-DD
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) {
-    const y = Number(m[1]);
-    const mon = Number(m[2]);
-    const d = Number(m[3]);
-    const dt = new Date(Date.UTC(y, mon - 1, d, 12, 0, 0));
-    return Number.isNaN(dt.getTime()) ? null : dt;
-  }
-
-  const dt2 = new Date(s);
-  return Number.isNaN(dt2.getTime()) ? null : dt2;
-}
-
-function safeToLocaleDateString(d: Date | null, options?: Intl.DateTimeFormatOptions) {
-  try {
-    if (!d || Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString(undefined, options);
-  } catch {
-    return '';
-  }
-}
 
 export function TaskDashboard({
   tasks,
@@ -103,78 +33,21 @@ export function TaskDashboard({
   const [selectedTaskToComplete, setSelectedTaskToComplete] = useState<Task | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
-
   const [loading, setLoading] = useState(true);
-  const [planLoading, setPlanLoading] = useState(true);
-  const [planItems, setPlanItems] = useState<CultivationPlanItem[] | null>(null);
-
-  const [supervisorModalOpen, setSupervisorModalOpen] = useState(false);
-  const [selectedPlanItem, setSelectedPlanItem] = useState<CultivationPlanItem | null>(null);
 
   useEffect(() => {
     const id = setTimeout(() => setLoading(false), 650);
     return () => clearTimeout(id);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const pending = tasks.filter((t) => t.status === 'Pending').length;
+  const completedCount = tasks.filter((t) => t.status === 'Completed').length;
+  const totalCount = Math.max(1, tasks.length);
+  const progressPct = Math.min(1, Math.max(0, completedCount / totalCount));
 
-    async function loadCultivationPlan() {
-      try {
-        const farmerId = getFarmerId();
-        if (!farmerId) {
-          if (!cancelled) setPlanItems(null);
-          return;
-        }
-
-        const r = await getJson<any>(`/admin_cultivation/farmer_caultivation_plan/${encodeURIComponent(farmerId)}`);
-        if (!r.ok) return;
-
-        const raw = r.data;
-        const list = Array.isArray(raw) ? raw : [];
-
-        const mapped: CultivationPlanItem[] = list
-          .map((x: any, idx: number) => {
-            const activity = String(x?.activity ?? '').trim();
-            if (!activity) return null;
-            const id = String(
-              x?.calendar_id ??
-                x?.plan_id ??
-                `${String(x?.farm_id ?? 'farm')}-${String(x?.date ?? 'date')}-${idx}`
-            );
-            return {
-              id,
-              calendar_id: x?.calendar_id ? String(x.calendar_id) : undefined,
-              plan_id: x?.plan_id ? String(x.plan_id) : undefined,
-              block_id: x?.block_id ? String(x.block_id) : undefined,
-              farm_id: x?.farm_id ? String(x.farm_id) : undefined,
-              activity,
-              index: typeof x?.index === 'number' ? x.index : Number(x?.index),
-              date: x?.date ? String(x.date) : undefined,
-              assigned_area: typeof x?.assigned_area === 'number' ? x.assigned_area : Number(x?.assigned_area),
-              status: x?.status ? String(x.status) : undefined,
-            } as CultivationPlanItem;
-          })
-          .filter(Boolean) as CultivationPlanItem[];
-
-        if (cancelled) return;
-        setPlanItems(mapped);
-      } finally {
-        if (!cancelled) setPlanLoading(false);
-      }
-    }
-
-    loadCultivationPlan();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const dueToday = Math.min(2, pending);
 
   const toastVisible = !!toast;
-
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
-  };
 
   const openConfirm = (task: Task) => {
     setSelectedTaskToComplete(task);
@@ -199,24 +72,9 @@ export function TaskDashboard({
     setTimeout(() => setToast(null), 3000);
   };
 
-  const effectivePlan = planItems && planItems.length ? planItems : null;
-  const planList = useMemo(() => {
-    return (effectivePlan ?? []).slice().sort((a, b) => {
-      const ai = Number.isFinite(Number(a.index)) ? Number(a.index) : 0;
-      const bi = Number.isFinite(Number(b.index)) ? Number(b.index) : 0;
-      if (ai !== bi) return ai - bi;
-      return String(a.date ?? '').localeCompare(String(b.date ?? ''));
-    });
-  }, [effectivePlan]);
-
-  const farmerTodos = useMemo(() => planList.filter((r) => isPendingForFarmer(r.status)), [planList]);
-  const supervisorTodos = useMemo(() => planList.filter((r) => isPendingForSupervisor(r.status)), [planList]);
-
-  const completedCount = effectivePlan
-    ? effectivePlan.filter((r) => String(r.status ?? '').toLowerCase() === 'completed').length
-    : tasks.filter((t) => t.status === 'Completed').length;
-  const totalCount = Math.max(1, effectivePlan ? effectivePlan.length : tasks.length);
-  const progressPct = Math.min(1, Math.max(0, completedCount / totalCount));
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+  };
 
   const today = new Date();
   const dateStr = today.toLocaleDateString(undefined, {
@@ -234,25 +92,6 @@ export function TaskDashboard({
     const key = (first.color === 'purple' ? 'violet' : first.color) as any;
     return pickAccent(key);
   }, [tasks]);
-
-  const openSupervisorStatus = (row: CultivationPlanItem) => {
-    setSelectedPlanItem(row);
-    setSupervisorModalOpen(true);
-  };
-
-  const markWorkDoneLocal = (row: CultivationPlanItem) => {
-    // Local-only move from Farmer -> Supervisor until API integration is added.
-    setPlanItems((prev) => {
-      if (!prev) return prev;
-      return prev.map((it) => (it.id === row.id ? { ...it, status: 'Supervisor Pending' } : it));
-    });
-    showToast('Marked as work done (awaiting supervisor approval)');
-  };
-
-  const closeSupervisorStatus = () => {
-    setSupervisorModalOpen(false);
-    setSelectedPlanItem(null);
-  };
 
   return (
     <View style={styles.root}>
@@ -293,7 +132,7 @@ export function TaskDashboard({
 
         <View style={styles.progressRow}>
           <Text style={styles.progressLabel}>Daily Progress</Text>
-          <Text style={styles.progressRight}>{completedCount} of {effectivePlan ? effectivePlan.length : tasks.length} completed</Text>
+          <Text style={styles.progressRight}>{completedCount} of {tasks.length} completed</Text>
         </View>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${Math.round(progressPct * 100)}%` }]} />
@@ -327,7 +166,7 @@ export function TaskDashboard({
         contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 110 }}
       >
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>{effectivePlan ? 'Cultivation Plan' : 'Task List'}</Text>
+          <Text style={styles.sectionTitle}>Task List</Text>
           <Pressable
             accessibilityRole="button"
             style={styles.viewAllBtn}
@@ -341,7 +180,7 @@ export function TaskDashboard({
           </Pressable>
         </View>
 
-        {planLoading || loading ? (
+        {loading ? (
           <View style={{ gap: 12 }}>
             {[0, 1, 2, 3].map((k) => (
               <View key={k} style={styles.skelCard}>
@@ -357,118 +196,6 @@ export function TaskDashboard({
               </View>
             ))}
           </View>
-        ) : effectivePlan ? (
-          <View style={{ gap: 18 }}>
-            {/* Segment 1: To-do for farmer */}
-            <View style={{ gap: 12 }}>
-              <Text style={styles.segmentTitle}>To-do for Farmer</Text>
-              {farmerTodos.length === 0 ? (
-                <View style={styles.segmentEmpty}>
-                  <Text style={styles.segmentEmptyText}>No pending tasks for farmer.</Text>
-                </View>
-              ) : (
-                <View style={{ gap: 12 }}>
-                  {farmerTodos.map((row) => {
-                    const status = String(row.status ?? '—');
-                    const d = safeDate(row.date ?? '');
-                    const dateLabel =
-                      safeToLocaleDateString(d, { month: 'short', day: 'numeric', year: 'numeric' }) || (row.date ?? '—');
-
-                    return (
-                      <View key={row.id} style={styles.skelCard}>
-                        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-                          <View
-                            style={{
-                              width: 42,
-                              height: 42,
-                              borderRadius: 16,
-                              backgroundColor: 'rgba(75,122,85,0.12)',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <Flame size={18} color="#4b7a55" />
-                          </View>
-
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ color: '#111827', fontWeight: '900', fontSize: 14 }} numberOfLines={1}>
-                              {row.activity}
-                            </Text>
-                            <Text style={{ marginTop: 6, color: '#7b845f', fontWeight: '800', fontSize: 12 }}>{dateLabel}</Text>
-                            <Text style={{ marginTop: 4, color: '#6b7280', fontWeight: '700', fontSize: 12 }}>Status: {status}</Text>
-                          </View>
-
-                          <MotionPressable
-                            accessibilityRole="button"
-                            onPress={() => markWorkDoneLocal(row)}
-                            style={{ backgroundColor: '#4b7a55', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 999 }}
-                            whileTap={{ scale: 0.96 }}
-                          >
-                            <Text style={{ color: '#fff', fontWeight: '900', fontSize: 12 }}>Work done</Text>
-                          </MotionPressable>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-
-            {/* Segment 2: To-do for supervisor */}
-            <View style={{ gap: 12 }}>
-              <Text style={styles.segmentTitle}>To-do for Supervisor</Text>
-              {supervisorTodos.length === 0 ? (
-                <View style={styles.segmentEmpty}>
-                  <Text style={styles.segmentEmptyText}>No tasks pending supervisor approval.</Text>
-                </View>
-              ) : (
-                <View style={{ gap: 12 }}>
-                  {supervisorTodos.map((row) => {
-                    const status = String(row.status ?? '—');
-                    const d = safeDate(row.date ?? '');
-                    const dateLabel =
-                      safeToLocaleDateString(d, { month: 'short', day: 'numeric', year: 'numeric' }) || (row.date ?? '—');
-
-                    return (
-                      <View key={row.id} style={styles.skelCard}>
-                        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-                          <View
-                            style={{
-                              width: 42,
-                              height: 42,
-                              borderRadius: 16,
-                              backgroundColor: 'rgba(79,70,229,0.12)',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <Clock size={18} color="#4f46e5" />
-                          </View>
-
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ color: '#111827', fontWeight: '900', fontSize: 14 }} numberOfLines={1}>
-                              {row.activity}
-                            </Text>
-                            <Text style={{ marginTop: 6, color: '#7b845f', fontWeight: '800', fontSize: 12 }}>{dateLabel}</Text>
-                            <Text style={{ marginTop: 4, color: '#6b7280', fontWeight: '700', fontSize: 12 }}>Status: {status}</Text>
-                          </View>
-
-                          <MotionPressable
-                            accessibilityRole="button"
-                            onPress={() => openSupervisorStatus(row)}
-                            style={{ backgroundColor: '#4f46e5', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 999 }}
-                            whileTap={{ scale: 0.96 }}
-                          >
-                            <Text style={{ color: '#fff', fontWeight: '900', fontSize: 12 }}>Review</Text>
-                          </MotionPressable>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          </View>
         ) : tasks.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No tasks scheduled</Text>
@@ -482,36 +209,6 @@ export function TaskDashboard({
           </View>
         )}
       </ScrollView>
-
-      {/* Supervisor Status Modal (placeholder) */}
-      <Modal visible={supervisorModalOpen} transparent animationType="fade" onRequestClose={closeSupervisorStatus}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={[styles.modalIconCircle, { backgroundColor: 'rgba(79,70,229,0.10)' }]}>
-              <Clock size={64} color="#4f46e5" />
-            </View>
-            <Text style={styles.modalTitle}>Supervisor Status</Text>
-            <Text style={styles.modalDesc}>Supervisor status will be wired via API next.</Text>
-
-            {selectedPlanItem ? (
-              <View style={styles.taskPill}>
-                <Text style={styles.taskPillText}>{selectedPlanItem.activity}</Text>
-              </View>
-            ) : null}
-
-            <View style={styles.modalActions}>
-              <MotionPressable
-                accessibilityRole="button"
-                onPress={closeSupervisorStatus}
-                style={styles.cancelBtn as any}
-                whileTap={{ scale: 0.95 }}
-              >
-                <Text style={styles.cancelText}>Close</Text>
-              </MotionPressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Confirmation Modal */}
       <Modal visible={showTaskConfirmModal} transparent animationType="fade" onRequestClose={closeConfirm}>
@@ -729,23 +426,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 20,
     fontWeight: '900',
-  },
-  segmentTitle: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '900',
-    paddingHorizontal: 4,
-  },
-  segmentEmpty: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 14,
-    alignItems: 'center',
-  },
-  segmentEmptyText: {
-    color: '#6b7280',
-    fontWeight: '700',
-    fontSize: 12,
   },
   viewAllBtn: {
     flexDirection: 'row',
